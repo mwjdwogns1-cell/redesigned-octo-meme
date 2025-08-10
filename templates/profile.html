@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Profile</title>
+</head>
+<body>
+    <h1>Profile</h1>
+    <p>Welcome! You have successfully authenticated with your Google account.</p>
+
+    <h2>Stored Credentials</h2>
+    <pre>{{ credentials | tojson(indent=4) }}</pre>
+
+    <h2>Sync Tokens</h2>
+    <pre>{{ sync_tokens | tojson(indent=4) }}</pre>
+
+    <a href="{{ url_for('logout') }}">
+        <button>Logout</button>
+    </a>
+</body>
+</html>
