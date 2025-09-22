@@ -1,0 +1,162 @@
+/* 기본 스타일 초기화 및 설정 */
+body {
+    margin: 0;
+    font-family: 'Malgun Gothic', sans-serif;
+    background: linear-gradient(180deg, #1e1a5c, #0d0b2b);
+    color: #ffffff;
+    min-height: 100vh;
+}
+
+.container {
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 20px;
+}
+
+/* 모든 버튼의 기본 스타일 */
+button {
+    background-color: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    color: #e0e0e0;
+    padding: 10px 15px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 14px;
+    transition: background-color 0.3s;
+}
+
+button:hover {
+    background-color: rgba(255, 255, 255, 0.2);
+}
+
+button i {
+    margin-right: 8px;
+}
+
+/* 헤더 스타일 */
+header {
+    text-align: center;
+    margin-bottom: 30px;
+}
+
+.header-top-left {
+    display: flex;
+    justify-content: flex-start;
+    gap: 10px;
+    margin-bottom: 20px;
+}
+
+.header-main h1 {
+    font-size: 2.5em;
+    margin: 0 0 20px 0;
+}
+
+.header-features {
+    display: flex;
+    justify-content: center;
+    gap: 15px;
+}
+
+/* 네비게이션 필터 스타일 */
+nav {
+    display: flex;
+    justify-content: center;
+    gap: 10px;
+    margin-bottom: 40px;
+}
+
+nav button.active {
+    background-color: #5c67f2;
+    border-color: #5c67f2;
+}
+
+nav button.highlight {
+    background: linear-gradient(90deg, #8e44ad, #e91e63);
+    border: none;
+}
+
+/* 비디오 그리드 스타일 */
+.video-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 25px;
+}
+
+/* === 수정된 카드 스타일 부분 === */
+.video-card {
+    background-color: #1c1852;
+    border-radius: 12px;
+    padding: 20px; 
+    cursor: pointer;
+    transition: transform 0.3s;
+}
+
+.video-card:hover {
+    transform: translateY(-5px);
+}
+
+.card-inner-wrapper {
+    display: flex;
+    align-items: flex-start;
+    gap: 15px;
+}
+
+.card-inner-wrapper img {
+    width: 100px;
+    height: 100px;
+    border-radius: 8px;
+    flex-shrink: 0;
+}
+
+.card-content {
+    padding: 0;
+}
+/* === 수정 끝 === */
+
+.card-content h3 {
+    font-size: 16px;
+    margin: 0 0 5px 0;
+}
+
+.card-content .subtitle {
+    font-size: 14px;
+    color: #a0a0a0;
+    margin: 0 0 15px 0;
+}
+
+.tags span {
+    background-color: rgba(0, 0, 0, 0.3);
+    padding: 4px 8px;
+    border-radius: 5px;
+    font-size: 12px;
+    margin-right: 5px;
+}
+
+/* 푸터 스타일 */
+footer {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 15px;
+    margin-top: 50px;
+    padding: 20px;
+    background-color: rgba(0, 0, 0, 0.2);
+    border-radius: 10px;
+}
+
+footer input, footer select {
+    background-color: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    color: white;
+    padding: 10px;
+    border-radius: 8px;
+    font-size: 14px;
+}
+
+footer input {
+    width: 300px;
+}
+
+footer button {
+    background-color: #5c67f2;
+}
