@@ -1,0 +1,20 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body {
+  background: #0b0f14;
+  color: #e8edf2;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* 큰 탭 영역, 모바일 우선 */
+body {
+  font-family: ui-sans-serif, system-ui, -apple-system, 'Apple SD Gothic Neo',
+    'Noto Sans KR', sans-serif;
+}
