@@ -30,6 +30,57 @@ export async function requestPermission(): Promise<PermissionState> {
   }
 }
 
+// ---- Web Push (앱이 꺼져 있어도 서버가 보내는 알림) ----
+
+const VAPID_PUBLIC_KEY = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY ?? '';
+const SUBSCRIBE_ENDPOINT = '/.netlify/functions/subscribe';
+
+/** Web Push 사용 가능 여부 (브라우저 지원 + VAPID 키 설정됨) */
+export function pushConfigured(): boolean {
+  return (
+    typeof window !== 'undefined' &&
+    'serviceWorker' in navigator &&
+    'PushManager' in window &&
+    VAPID_PUBLIC_KEY.length > 0
+  );
+}
+
+function urlBase64ToUint8Array(base64: string): Uint8Array {
+  const padding = '='.repeat((4 - (base64.length % 4)) % 4);
+  const b64 = (base64 + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const raw = atob(b64);
+  const out = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+  return out;
+}
+
+/**
+ * 푸시 구독 후 서버(Netlify 함수)에 등록.
+ * 권한 granted + VAPID 키 설정 시에만 동작. 실패해도 포그라운드 알림은 유지.
+ * @returns 구독 성공 여부
+ */
+export async function subscribeForPush(): Promise<boolean> {
+  if (!pushConfigured() || currentPermission() !== 'granted') return false;
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    const existing = await reg.pushManager.getSubscription();
+    const sub =
+      existing ??
+      (await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY) as BufferSource,
+      }));
+    const res = await fetch(SUBSCRIBE_ENDPOINT, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ subscription: sub.toJSON() }),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 /** 서비스워커 등록 (PWA + 알림 표시 주체) */
 export async function registerServiceWorker(): Promise<ServiceWorkerRegistration | null> {
   if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return null;

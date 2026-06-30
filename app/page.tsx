@@ -78,9 +78,9 @@ export default function Home() {
 
       {/* 알림 한계 안내 */}
       <footer className="rounded-xl bg-panel/60 p-3 text-xs leading-relaxed text-slate-500">
-        ⚠️ 정시 알림은 앱(탭/PWA)이 열려 있을 때 동작합니다. 앱이 완전히 종료되면 OS가
-        알림을 누락할 수 있어요. 꼭 챙겨야 하는 시각은 휴대폰 기본 알람을 함께 맞춰두는
-        것을 권합니다.
+        ⓘ 백그라운드 알림(Web Push)이 켜져 있으면 앱을 꺼놔도 정시에 알림이 옵니다. 다만
+        기기 절전·네트워크 상태에 따라 ±1분 오차나 드물게 누락이 생길 수 있어요. 절대
+        놓치면 안 되는 시각은 휴대폰 기본 알람을 함께 맞춰두는 것을 권합니다.
       </footer>
     </main>
   );

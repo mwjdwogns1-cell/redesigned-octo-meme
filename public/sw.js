@@ -35,6 +35,26 @@ self.addEventListener('fetch', (event) => {
   );
 });
 
+// 서버(Netlify 스케줄 함수)에서 보낸 Web Push 수신 → 알림 표시.
+// 앱이 완전히 종료돼 있어도 브라우저가 이 핸들러를 깨워 알림을 띄운다.
+self.addEventListener('push', (event) => {
+  let data = {};
+  try {
+    data = event.data ? event.data.json() : {};
+  } catch (e) {
+    data = { body: event.data ? event.data.text() : '' };
+  }
+  const title = data.title || '식습관 리마인더';
+  const options = {
+    body: data.body || '',
+    tag: data.tag, // 포그라운드 알림과 같은 tag → 중복 시 하나로 합쳐짐
+    icon: '/icons/icon-192.png',
+    badge: '/icons/icon-192.png',
+    renotify: true,
+  };
+  event.waitUntil(self.registration.showNotification(title, options));
+});
+
 // 페이지에서 직접 못 띄울 때를 위한 메시지 폴백.
 self.addEventListener('message', (event) => {
   const data = event.data || {};

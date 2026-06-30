@@ -5,6 +5,11 @@
 [build.environment]
   NODE_VERSION = "20"
 
+# Web Push 발송용 서버리스 함수 (subscribe = 구독 저장, send-reminders = 스케줄 발송)
+[functions]
+  directory = "netlify/functions"
+  node_bundler = "esbuild"
+
 # 서비스워커는 항상 최신본을 받아야 하므로 캐시 비활성
 [[headers]]
   for = "/sw.js"

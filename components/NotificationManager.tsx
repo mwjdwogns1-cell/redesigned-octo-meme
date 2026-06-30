@@ -5,9 +5,11 @@ import { Rule } from '@/lib/rules';
 import {
   PermissionState,
   currentPermission,
+  pushConfigured,
   registerServiceWorker,
   requestPermission,
   runDueNotifications,
+  subscribeForPush,
 } from '@/lib/notifications';
 
 export function NotificationManager({
@@ -20,14 +22,21 @@ export function NotificationManager({
   onEnableChange: (v: boolean) => void;
 }) {
   const [perm, setPerm] = useState<PermissionState>('default');
+  const [pushOn, setPushOn] = useState(false);
   const [dismissed, setDismissed] = useState(false);
   const rulesRef = useRef(rules);
   rulesRef.current = rules;
 
-  // SW 등록 + 현재 권한 파악
+  // SW 등록 + 현재 권한 파악 + (이미 허용돼 있으면) 백그라운드 푸시 구독 갱신
   useEffect(() => {
-    registerServiceWorker();
-    setPerm(currentPermission());
+    (async () => {
+      await registerServiceWorker();
+      const p = currentPermission();
+      setPerm(p);
+      if (p === 'granted' && pushConfigured()) {
+        setPushOn(await subscribeForPush());
+      }
+    })();
   }, []);
 
   // 권한 granted면 정시 알림 스케줄러 가동 (앱이 열려있는 동안)
@@ -51,12 +60,23 @@ export function NotificationManager({
     const res = await requestPermission();
     setPerm(res);
     onEnableChange(res === 'granted');
+    if (res === 'granted' && pushConfigured()) {
+      setPushOn(await subscribeForPush());
+    }
   }
 
   if (perm === 'granted') {
-    return notificationsEnabled ? null : (
+    // 백그라운드 푸시 구독 성공 시: 앱이 꺼져 있어도 알림이 온다고 안내
+    if (pushOn) {
+      return notificationsEnabled ? null : (
+        <Banner tone="ok">
+          ✅ 백그라운드 알림이 켜졌습니다. 앱을 꺼놔도 정시에 알림이 옵니다.
+        </Banner>
+      );
+    }
+    return (
       <Banner tone="ok">
-        ✅ 알림이 켜져 있습니다. 앱이 열려 있는 동안 정시에 리마인드합니다.
+        ✅ 알림이 켜져 있습니다. (백그라운드 푸시 미설정 — 앱이 열려 있는 동안만 동작)
       </Banner>
     );
   }
