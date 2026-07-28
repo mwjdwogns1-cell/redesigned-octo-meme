@@ -1,0 +1,171 @@
+<!-- VMD 담당자 현황판 · Apps Script 파일명: admin -->
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<style>
+  :root{--navy:#0B1B4D;--blue:#1428A0;--blue2:#2B47D6;--bg:#EEF1F8;
+        --card:#fff;--line:#DFE5F2;--txt:#1A1D2E;--sub:#7A83A0;--ok:#1AA179;--no:#E0393E}
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  body{margin:0;background:var(--bg);color:var(--txt);font-size:14px;
+    font-family:-apple-system,BlinkMacSystemFont,"Malgun Gothic","맑은 고딕",sans-serif}
+  header{background:linear-gradient(135deg,var(--navy),var(--blue));color:#fff;padding:16px 16px 18px}
+  header h1{margin:0;font-size:16px;font-weight:700}
+  .ctl{display:flex;gap:8px;align-items:center;margin-top:12px}
+  select{flex:1;padding:10px;border:0;border-radius:9px;font-size:15px;font-family:inherit;background:#fff;color:var(--txt)}
+  .rate{background:rgba(255,255,255,.16);border-radius:9px;padding:10px 14px;
+    font-weight:700;white-space:nowrap;font-size:15px}
+  .wrap{padding:12px}
+  .filters{display:flex;gap:6px;margin-bottom:12px;overflow-x:auto;padding-bottom:2px}
+  .filters button{flex:0 0 auto;padding:8px 14px;border:1px solid var(--line);background:#fff;
+    border-radius:99px;font-size:13px;font-family:inherit;color:var(--sub);font-weight:600}
+  .filters button.on{background:var(--blue);border-color:var(--blue);color:#fff}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(158px,1fr));gap:9px}
+  .st{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px;
+    border-left:4px solid var(--no)}
+  .st.ok{border-left-color:var(--ok)}
+  .st .n{font-weight:700;font-size:15px;display:flex;justify-content:space-between;align-items:center}
+  .st .n em{font-style:normal;font-size:11px;color:var(--sub);font-weight:500}
+  .st .m{font-size:11.5px;color:var(--sub);margin:3px 0 9px}
+  .tags{display:flex;flex-wrap:wrap;gap:4px;min-height:22px}
+  .tag{font-size:10.5px;padding:3px 7px;border-radius:5px;background:#E8ECF9;color:var(--blue);font-weight:600}
+  .st .f{margin-top:9px;padding-top:8px;border-top:1px dashed var(--line);
+    font-size:11.5px;color:var(--sub);display:flex;justify-content:space-between}
+  .st .f b{color:var(--blue2)}
+  .none{color:var(--no);font-size:12px;font-weight:600;padding:4px 0}
+  /* 상세 */
+  .sheet{position:fixed;inset:0;background:rgba(11,27,77,.55);display:none;z-index:50}
+  .sheet.on{display:block}
+  .panel{position:absolute;left:0;right:0;bottom:0;max-height:88%;overflow:auto;
+    background:#fff;border-radius:18px 18px 0 0;padding:18px 16px 30px}
+  .panel h2{margin:0 0 2px;font-size:18px;color:var(--navy)}
+  .panel .sub{color:var(--sub);font-size:12.5px;margin-bottom:14px}
+  .sub-card{border:1px solid var(--line);border-radius:11px;padding:12px;margin-bottom:10px}
+  .sub-card .h{display:flex;justify-content:space-between;font-size:12px;color:var(--sub);margin-bottom:7px}
+  .note{background:#F7F9FE;border-radius:8px;padding:9px;font-size:13px;margin-top:9px;white-space:pre-wrap}
+  .gal{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:9px}
+  .gal a{display:block;padding-top:100%;position:relative;border-radius:7px;overflow:hidden;background:#E9EDF7}
+  .gal img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+  .close{width:100%;padding:14px;border:0;border-radius:11px;background:var(--blue);
+    color:#fff;font-weight:700;font-size:15px;font-family:inherit;margin-top:8px}
+  .load{text-align:center;color:var(--sub);padding:40px;font-size:13px}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>VMD 제출 현황 · 대구경북 22점</h1>
+  <div class="ctl">
+    <select id="wk" onchange="load()"></select>
+    <div class="rate" id="rate">–</div>
+  </div>
+</header>
+
+<div class="wrap">
+  <div class="filters" id="filters">
+    <button class="on" data-f="all">전체</button>
+    <button data-f="none">미제출</button>
+    <button data-f="대구">대구</button>
+    <button data-f="경북">경북</button>
+    <button data-f="백화점">백화점</button>
+  </div>
+  <div class="grid" id="grid"><div class="load">불러오는 중…</div></div>
+</div>
+
+<div class="sheet" id="sheet" onclick="if(event.target===this)closeSheet()">
+  <div class="panel" id="panel"></div>
+</div>
+
+<script>
+var BOARD = null, FILTER = 'all';
+
+google.script.run.withSuccessHandler(function(ws){
+  var s = document.getElementById('wk');
+  s.innerHTML = ws.map(function(w,i){
+    return '<option value="'+w.key+'">'+w.label+(i===0?' (이번 주)':'')+'</option>';
+  }).join('');
+  load();
+}).listWeeks();
+
+function load(){
+  document.getElementById('grid').innerHTML = '<div class="load">불러오는 중…</div>';
+  google.script.run.withSuccessHandler(function(b){ BOARD = b; render(); })
+    .getBoard(document.getElementById('wk').value);
+}
+
+document.getElementById('filters').onclick = function(e){
+  if (e.target.tagName !== 'BUTTON') return;
+  Array.prototype.forEach.call(this.children, function(b){ b.classList.remove('on'); });
+  e.target.classList.add('on');
+  FILTER = e.target.dataset.f;
+  render();
+};
+
+function render(){
+  if (!BOARD) return;
+  document.getElementById('rate').textContent =
+    BOARD.done + '/' + BOARD.total + '  ' + Math.round(BOARD.done / BOARD.total * 100) + '%';
+
+  var list = BOARD.stores.filter(function(s){
+    if (FILTER === 'all')  return true;
+    if (FILTER === 'none') return !s.submitted;
+    if (FILTER === '백화점') return s.type === '백화점';
+    return s.region === FILTER;
+  });
+
+  document.getElementById('grid').innerHTML = list.map(function(s, i){
+    var tags = Object.keys(s.items || {});
+    return '<div class="st ' + (s.submitted ? 'ok' : '') + '" onclick="detail(\'' + s.name + '\')">' +
+      '<div class="n">' + s.name + '<em>' + s.type + '</em></div>' +
+      '<div class="m">' + s.region + (s.manager ? ' · ' + s.manager : '') + '</div>' +
+      (s.submitted
+        ? '<div class="tags">' + tags.map(function(t){ return '<span class="tag">' + t + '</span>'; }).join('') + '</div>' +
+          '<div class="f"><span>📷 <b>' + s.photos + '</b>장</span><span>' + s.last + '</span></div>'
+        : '<div class="none">미제출</div>') +
+      '</div>';
+  }).join('') || '<div class="load">해당 지점이 없습니다.</div>';
+}
+
+function detail(name){
+  var s = BOARD.stores.filter(function(x){ return x.name === name; })[0];
+  if (!s) return;
+  var html = '<h2>' + s.name + '</h2>' +
+    '<div class="sub">' + s.region + ' · ' + s.type + (s.manager ? ' · ' + s.manager : '') +
+    ' · ' + BOARD.weekLabel + ' 주차</div>';
+
+  if (!s.submitted) {
+    html += '<div class="load">이번 주 제출 내역이 없습니다.</div>';
+  } else {
+    s.subs.forEach(function(sub, i){
+      html += '<div class="sub-card">' +
+        '<div class="h"><span>' + sub.at + ' · ' + (sub.reporter || '') + '</span>' +
+        '<span>' + sub.status + '</span></div>' +
+        '<div class="tags">' + sub.items.split(',').map(function(t){
+          return '<span class="tag">' + t.trim() + '</span>'; }).join('') + '</div>' +
+        (sub.note ? '<div class="note">' + sub.note + '</div>' : '') +
+        '<div class="gal" id="g' + i + '">' +
+          (sub.photos ? '<div class="load" style="grid-column:1/-1">사진 ' + sub.photos + '장 불러오는 중…</div>' : '') +
+        '</div></div>';
+    });
+  }
+  html += '<button class="close" onclick="closeSheet()">닫기</button>';
+  document.getElementById('panel').innerHTML = html;
+  document.getElementById('sheet').classList.add('on');
+
+  s.subs.forEach(function(sub, i){
+    if (!sub.photos || !sub.folderId) return;
+    google.script.run.withSuccessHandler(function(ps){
+      var g = document.getElementById('g' + i);
+      if (!g) return;
+      g.innerHTML = ps.map(function(p){
+        return '<a href="' + p.url + '" target="_blank">' +
+          (p.thumb ? '<img src="' + p.thumb + '">' : '') + '</a>';
+      }).join('');
+    }).getPhotos(sub.folderId);
+  });
+}
+
+function closeSheet(){ document.getElementById('sheet').classList.remove('on'); }
+</script>
+</body>
+</html>
