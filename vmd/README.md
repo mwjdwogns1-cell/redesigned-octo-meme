@@ -40,6 +40,7 @@
 | 파일 | 용도 |
 |---|---|
 | [`설치가이드.md`](설치가이드.md) | **여기부터 시작.** 15분 설치 절차 |
+| [`이어서하기.md`](이어서하기.md) | 다른 PC·새 대화창에서 이어받을 때 읽히는 인수인계 메모 |
 | [`Code.gs`](Code.gs) | 서버 로직 (Apps Script에 붙여넣기) |
 | [`form.html`](form.html) | 지점 제출 화면 (Apps Script 파일명 `form`) |
 | [`admin.html`](admin.html) | VMD 담당자 현황판 (Apps Script 파일명 `admin`) |
