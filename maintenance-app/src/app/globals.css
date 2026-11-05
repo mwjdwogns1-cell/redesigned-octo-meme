@@ -1,0 +1,22 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html, body { background: #f4f5f8; color: #111827; -webkit-tap-highlight-color: transparent; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo', 'Noto Sans KR', 'Malgun Gothic', sans-serif; }
+
+@layer components {
+  .btn { @apply inline-flex min-h-[44px] items-center justify-center rounded-xl px-4 text-[15px] font-semibold transition active:scale-[.98] disabled:opacity-40; }
+  .btn-primary { @apply btn bg-brand text-white; }
+  .btn-outline { @apply btn border border-slate-300 bg-white text-slate-800; }
+  .btn-danger { @apply btn bg-red-600 text-white; }
+  .btn-warn { @apply btn bg-amber-500 text-white; }
+  .input { @apply min-h-[44px] w-full rounded-xl border border-slate-300 bg-white px-3 text-[16px] outline-none focus:border-brand focus:ring-2 focus:ring-brand/20; }
+  .input-err { @apply border-red-500 ring-2 ring-red-200; }
+  .card { @apply rounded-2xl bg-white p-4 shadow-sm ring-1 ring-slate-200/70; }
+  .chip { @apply inline-flex min-h-[44px] items-center justify-center rounded-xl border border-slate-300 bg-white px-3.5 text-[15px] font-medium text-slate-700 active:scale-[.98]; }
+  .chip-on { @apply border-brand bg-brand text-white; }
+  .chip-err { @apply border-red-400; }
+  .lbl { @apply mb-1.5 block text-[14px] font-semibold text-slate-700; }
+  .err { @apply mt-1 text-[13px] font-medium text-red-600; }
+}
