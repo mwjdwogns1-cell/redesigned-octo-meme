@@ -2,12 +2,12 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js';
-import type { Item, Project, Pt } from './types';
+import type { Item, Opening, Project, Pt } from './types';
 import { arcPoints, dist, segmentPath } from './geom';
 
-export type Tool = 'select' | 'wall' | 'glass' | 'array' | 'place' | 'calibrate';
+export type Tool = 'select' | 'wall' | 'glass' | 'array' | 'place' | 'calibrate' | 'door' | 'floor';
 export type Shape = 'line' | 'arc';
-export type Selection = { type: 'item'; id: string } | { type: 'wall'; idx: number } | null;
+export type Selection = { type: 'item'; id: string } | { type: 'wall'; idx: number } | { type: 'opening'; id: string } | null;
 export interface Layers { walls: boolean; glass: boolean; items: boolean; underlay: boolean; segs: boolean }
 
 export interface EngineCallbacks {
@@ -18,6 +18,8 @@ export interface EngineCallbacks {
   onPlace(p: Pt): void;
   onMoveItem(id: string, x: number, z: number): void;
   onCalibrate(a: Pt, b: Pt): void;
+  onOpening(wall: number, t: number): void;
+  onFloor(pts: Pt[]): void;
   onStatus(text: string): void;
 }
 
@@ -98,6 +100,7 @@ export class Engine {
   private ray = new THREE.Raycaster();
   private plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
   private pts: Pt[] = [];
+  private arcBuf: Pt[] = [];
   private hover: Pt | null = null;
   private snapPts: Float32Array = new Float32Array(0);
   private sel: Selection = null;
@@ -205,9 +208,11 @@ export class Engine {
   }
 
   setTool(t: Tool, shape?: Shape) {
+    const onlyShape = t === this.tool && shape && shape !== this.shape;
     this.tool = t;
     if (shape) this.shape = shape;
-    this.pts = [];
+    if (!onlyShape) this.pts = [];
+    this.arcBuf = [];
     this.updateRubber();
     this.updateControlButtons();
     const hints: Record<Tool, string> = {
@@ -217,6 +222,8 @@ export class Engine {
       array: this.shape === 'arc' ? '구간 배치(곡선): 시작 → 중간 → 끝 클릭' : '구간 배치: 벽 선을 따라 클릭 · 더블클릭/Enter로 확정',
       place: '클릭한 위치에 선택한 아이템 배치',
       calibrate: '축척: 실제 길이를 아는 두 점을 클릭',
+      door: '출입구: 벽(또는 유리) 위를 클릭하면 그 위치에 개구부 생성',
+      floor: '바닥: 외곽 꼭짓점을 차례로 클릭 · 곡선 구간은 [곡선]으로 바꿔 중간점→끝점 · 첫 점 클릭/Enter로 닫기',
     };
     this.cb.onStatus(hints[t]);
   }
@@ -292,15 +299,22 @@ export class Engine {
       m.receiveShadow = true;
       return m;
     };
-    const floor = mk(new THREE.PlaneGeometry(f.w, f.d), f.w, f.d);
-    floor.rotation.x = -Math.PI / 2;
-    floor.name = 'FLOOR';
-    floor.userData.export = true;
-    this.gFloor.add(floor);
-    // 기초 판 (두께감)
-    const base = new THREE.Mesh(new THREE.BoxGeometry(f.w, 10, f.d), new THREE.MeshStandardMaterial({ color: '#cfcdc8' }));
-    base.position.y = -5.05;
-    this.gFloor.add(base);
+    const poly = f.shape === 'poly' && (f.zones || []).length > 0;
+    if (!poly) {
+      const floor = mk(new THREE.PlaneGeometry(f.w, f.d), f.w, f.d);
+      floor.rotation.x = -Math.PI / 2;
+      floor.name = 'FLOOR';
+      floor.userData.export = true;
+      this.gFloor.add(floor);
+      const base = new THREE.Mesh(new THREE.BoxGeometry(f.w, 10, f.d), new THREE.MeshStandardMaterial({ color: '#cfcdc8' }));
+      base.position.y = -5.05;
+      this.gFloor.add(base);
+    } else {
+      // 작업 영역 표시용 옅은 판
+      const g = new THREE.Mesh(new THREE.PlaneGeometry(f.w, f.d), new THREE.MeshBasicMaterial({ color: '#f6f6f7' }));
+      g.rotation.x = -Math.PI / 2; g.position.y = -0.5;
+      this.gFloor.add(g);
+    }
     // 바닥 구역
     for (const z of f.zones || []) {
       if (!z.pts || z.pts.length < 3) continue;
@@ -362,35 +376,91 @@ export class Engine {
     const s = p.floor.plan.solids;
     const st = p.floor.plan.wallStyle || {};
     const topMat = new THREE.MeshStandardMaterial({ color: '#8d8d8d', roughness: 0.8 });
+    const glassMat = (c?: string) => new THREE.MeshStandardMaterial({
+      color: c || '#9fd0ee', transparent: true, opacity: 0.28, roughness: 0.05, metalness: 0.1, depthWrite: false,
+    });
+    const byWall = new Map<number, Opening[]>();
+    for (const o of p.openings || []) { const a = byWall.get(o.wall) || []; a.push(o); byWall.set(o.wall, a); }
     for (let i = 0, idx = 0; i + 4 < s.length + 1; i += 5, idx++) {
-      const [x1, z1, x2, z2, t] = [s[i], s[i + 1], s[i + 2], s[i + 3], s[i + 4]];
+      const [x1, z1, x2, z2, t0] = [s[i], s[i + 1], s[i + 2], s[i + 3], s[i + 4]];
+      const t = Math.max(0.5, t0);
       const L = Math.hypot(x2 - x1, z2 - z1);
       if (L < 0.1) continue;
       const style = st[String(idx)] || {};
       const glass = style.kind === 'glass';
-      const h = style.h ?? p.floor.plan.h ?? 270;
       const y0 = style.y0 ?? 0;
-      const geo = new THREE.BoxGeometry(L, h, Math.max(0.5, t));
-      let mesh: THREE.Mesh;
-      if (glass) {
-        mesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({
-          color: style.color || '#9fd0ee', transparent: true, opacity: 0.28, roughness: 0.05, metalness: 0.1, depthWrite: false,
-        }));
-      } else {
-        const side = new THREE.MeshStandardMaterial({ color: style.color || '#efece6', roughness: 0.85 });
-        mesh = new THREE.Mesh(geo, [side, side, topMat, side, side, side]);
-        mesh.castShadow = true; mesh.receiveShadow = true;
+      const top = style.h ?? p.floor.plan.h ?? 270;
+      const H = Math.max(1, top - y0);
+      const grp = new THREE.Group();
+      grp.position.set(x1, 0, z1);
+      grp.rotation.y = Math.atan2(-(z2 - z1), x2 - x1);
+      grp.name = (glass ? 'GLASS_' : 'WALL_') + String(idx).padStart(3, '0');
+      const sel = { type: 'wall', idx };
+      grp.userData = { sel, glass, export: true };
+      const side = glass ? glassMat(style.color) : new THREE.MeshStandardMaterial({ color: style.color || '#efece6', roughness: 0.85 });
+      const box = (a: number, b: number, ya: number, yb: number, mat: THREE.Material | THREE.Material[] = glass ? side : [side, side, topMat, side, side, side], th = t) => {
+        if (b - a < 0.2 || yb - ya < 0.2) return null;
+        const geo = new THREE.BoxGeometry(b - a, yb - ya, th);
+        const m = new THREE.Mesh(geo, mat);
+        m.position.set((a + b) / 2, (ya + yb) / 2, 0);
+        m.castShadow = !glass; m.receiveShadow = true;
+        m.userData.sel = sel;
+        if (glass) {
+          const e = new THREE.LineSegments(new THREE.EdgesGeometry(geo), new THREE.LineBasicMaterial({ color: 0x3a9ad9 }));
+          e.userData.noExport = true;
+          m.add(e);
+        }
+        grp.add(m);
+        return m;
+      };
+      // 개구부 구간 계산
+      const ops = (byWall.get(idx) || [])
+        .map((o) => ({ o, a: Math.max(0, o.t - o.w / 2), b: Math.min(L, o.t + o.w / 2) }))
+        .filter((r) => r.b - r.a > 1)
+        .sort((m, n) => m.a - n.a);
+      let cur = 0;
+      for (const r of ops) {
+        if (r.a > cur) box(cur, r.a, y0, top);
+        const oh = Math.min(top, r.o.h);
+        box(Math.max(cur, r.a), r.b, Math.max(y0, oh), top); // 상부(인방)
+        this.addDoor(grp, r.o, r.a, r.b, oh, t);
+        cur = Math.max(cur, r.b);
       }
-      mesh.position.set((x1 + x2) / 2, y0 + h / 2, (z1 + z2) / 2);
-      mesh.rotation.y = Math.atan2(-(z2 - z1), x2 - x1);
-      if (glass) {
-        const e = new THREE.LineSegments(new THREE.EdgesGeometry(geo), new THREE.LineBasicMaterial({ color: 0x3a9ad9 }));
-        e.userData.noExport = true;
-        mesh.add(e);
-      }
-      mesh.name = (glass ? 'GLASS_' : 'WALL_') + String(idx).padStart(3, '0');
-      mesh.userData = { sel: { type: 'wall', idx }, glass, export: true };
-      this.gWalls.add(mesh);
+      if (cur < L) box(cur, L, y0, top);
+      void H;
+      this.gWalls.add(grp);
+    }
+  }
+
+  private addDoor(grp: THREE.Group, o: Opening, a: number, b: number, oh: number, t: number) {
+    const sel = { type: 'opening', id: o.id };
+    const w = b - a;
+    const mk = (geo: THREE.BufferGeometry, mat: THREE.Material, x: number, y: number, z: number) => {
+      const m = new THREE.Mesh(geo, mat);
+      m.position.set(x, y, z);
+      m.userData.sel = sel;
+      m.name = 'DOOR_' + o.id;
+      grp.add(m);
+      return m;
+    };
+    // 바닥 문턱 표시 (선택용 히트 영역 겸용)
+    const sill = mk(new THREE.BoxGeometry(w, 1, t + 4), new THREE.MeshStandardMaterial({ color: '#f0a040' }), (a + b) / 2, 0.6, 0);
+    sill.userData.export = true;
+    if (o.kind === 'glass') {
+      const gm = new THREE.MeshStandardMaterial({ color: '#bfe3f7', transparent: true, opacity: 0.35, depthWrite: false, roughness: 0.05 });
+      mk(new THREE.BoxGeometry(w / 2 - 1, oh - 2, 2), gm, a + w / 4, oh / 2, 0);
+      mk(new THREE.BoxGeometry(w / 2 - 1, oh - 2, 2), gm, b - w / 4, oh / 2, 0);
+      const fr = new THREE.MeshStandardMaterial({ color: '#444444' });
+      mk(new THREE.BoxGeometry(w, 4, t), fr, (a + b) / 2, oh - 2, 0);
+    } else if (o.kind === 'swing') {
+      // 여닫이: 힌지는 a쪽, 90° 열린 상태 + 평면 호
+      const leaf = mk(new THREE.BoxGeometry(4, oh - 2, w), new THREE.MeshStandardMaterial({ color: '#b08a60' }), a + 2, oh / 2, t / 2 + w / 2);
+      leaf.castShadow = true;
+      const pts: THREE.Vector3[] = [];
+      for (let k = 0; k <= 24; k++) { const th = (Math.PI / 2) * (k / 24); pts.push(new THREE.Vector3(a + Math.cos(th) * w, 1.5, t / 2 + Math.sin(th) * w)); }
+      const arc = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({ color: 0xd07a20 }));
+      arc.userData.noExport = true;
+      grp.add(arc);
     }
   }
 
@@ -420,7 +490,8 @@ export class Engine {
     };
     if (it.kind === 'model' && it.modelId) {
       const md = p.models[it.modelId];
-      const src = md?.data || md?.url;
+      // 파일로 연 경우(file://) 외부 경로 모델은 불러오지 않고 박스로 표시
+      const src = md?.data || (location.protocol.startsWith('http') ? md?.url : '');
       const ph = boxFallback();
       if (src) {
         loadModel(it.modelId, src).then((r) => {
@@ -463,7 +534,21 @@ export class Engine {
     const sel = this.sel; if (!sel) return;
     let target: THREE.Object3D | undefined;
     if (sel.type === 'item') target = this.gItems.children.find((c) => c.userData.sel?.id === sel.id);
-    else target = this.gWalls.children.find((c) => c.userData.sel?.idx === sel.idx);
+    else if (sel.type === 'wall') target = this.gWalls.children.find((c) => c.userData.sel?.idx === sel.idx);
+    else {
+      const parts: THREE.Object3D[] = [];
+      this.gWalls.traverse((c) => { if ((c as THREE.Mesh).isMesh && c.userData.sel?.type === 'opening' && c.userData.sel.id === sel.id) parts.push(c); });
+      if (parts.length) {
+        const box = new THREE.Box3();
+        parts.forEach((pp) => box.expandByObject(pp));
+        box.max.y = Math.max(box.max.y, 200);
+        const h = new THREE.Box3Helper(box, 0xff9500);
+        (h.material as THREE.LineBasicMaterial).depthTest = false;
+        h.renderOrder = 1000;
+        this.highlight = h; this.scene.add(h);
+      }
+      return;
+    }
     if (!target) return;
     const h = new THREE.BoxHelper(target, 0x0a84ff);
     (h.material as THREE.LineBasicMaterial).depthTest = false;
@@ -484,6 +569,8 @@ export class Engine {
     const s = p.floor.plan.solids;
     for (let i = 0; i + 4 < s.length + 1; i += 5) arr.push(s[i], s[i + 1], s[i + 2], s[i + 3]);
     for (const seg of p.segments || []) for (const q of seg.pts) arr.push(q[0], q[1]);
+    for (const z of p.floor.zones || []) for (const q of z.pts) arr.push(q[0], q[1]);
+    for (const q of this.pts) arr.push(q[0], q[1]);
     const u = p.floor.underlay;
     if (this.layers.underlay && u?.ref && u.visible !== false && p.underlays[u.ref]) {
       const hidden = new Set(u.hidden || []);
@@ -536,7 +623,15 @@ export class Engine {
     const pts = [...this.pts];
     if (this.hover && pts.length && this.tool !== 'select' && this.tool !== 'place') pts.push(this.hover);
     let draw = pts;
-    if (this.shape === 'arc' && pts.length === 3 && this.tool !== 'calibrate') draw = arcPoints(pts[0], pts[1], pts[2], 48);
+    if (this.tool === 'floor') {
+      draw = [...this.pts];
+      const last = draw[draw.length - 1];
+      if (last && this.hover) {
+        if (this.arcBuf.length === 1) draw.push(...arcPoints(last, this.arcBuf[0], this.hover, 24).slice(1));
+        else draw.push(this.hover);
+      }
+      if (draw.length >= 3) draw.push(draw[0]);
+    } else if (this.shape === 'arc' && pts.length === 3 && this.tool !== 'calibrate') draw = arcPoints(pts[0], pts[1], pts[2], 48);
     this.rubber.geometry.dispose();
     this.rubber.geometry = new THREE.BufferGeometry().setFromPoints(draw.map(([x, z]) => new THREE.Vector3(x, 3, z)));
     this.rubber.visible = draw.length >= 2;
@@ -553,6 +648,23 @@ export class Engine {
     return hits[0]?.object ?? null;
   }
 
+  /** 점에서 가장 가까운 벽과 벽 위 위치 */
+  private nearestWall(p: Pt): { idx: number; t: number; q: Pt; d: number } | null {
+    const s = this.project?.floor.plan.solids || [];
+    const th = 15 * this.worldPerPx();
+    let best: { idx: number; t: number; q: Pt; d: number } | null = null;
+    for (let i = 0, idx = 0; i + 4 < s.length + 1; i += 5, idx++) {
+      const x1 = s[i], z1 = s[i + 1], x2 = s[i + 2], z2 = s[i + 3];
+      const L = Math.hypot(x2 - x1, z2 - z1); if (L < 1) continue;
+      const ux = (x2 - x1) / L, uz = (z2 - z1) / L;
+      const tt = Math.max(0, Math.min(L, (p[0] - x1) * ux + (p[1] - z1) * uz));
+      const q: Pt = [x1 + ux * tt, z1 + uz * tt];
+      const d = dist(p, q);
+      if (d <= Math.max(th, s[i + 4] / 2 + 5) && (!best || d < best.d)) best = { idx, t: tt, q, d };
+    }
+    return best;
+  }
+
   // ───────────────────────── 입력 ─────────────────────────
   private onKey = (e: KeyboardEvent) => {
     this.shift = e.shiftKey;
@@ -567,7 +679,8 @@ export class Engine {
 
   finish() {
     if (this.tool === 'array' && this.shape === 'line' && this.pts.length >= 2) this.cb.onSegment('line', this.pts);
-    this.pts = []; this.updateRubber();
+    if (this.tool === 'floor' && this.pts.length >= 3) this.cb.onFloor(this.pts);
+    this.pts = []; this.arcBuf = []; this.updateRubber();
   }
 
   private onDown = (e: PointerEvent) => {
@@ -602,6 +715,17 @@ export class Engine {
       return;
     }
     if (this.tool === 'select') { this.marker.visible = false; return; }
+    if (this.tool === 'door') {
+      const w = this.nearestWall(fp);
+      this.marker.visible = !!w;
+      if (w) {
+        this.marker.position.set(w.q[0], 4, w.q[1]);
+        this.marker.scale.setScalar(this.worldPerPx());
+        (this.marker.material as THREE.MeshBasicMaterial).color.set(0xff9500);
+        this.cb.onStatus(`벽 #${w.idx} · 시작점에서 ${Math.round(w.t)} cm`);
+      }
+      return;
+    }
     const { p, snapped } = this.snap(fp);
     this.hover = p;
     this.marker.visible = true;
@@ -637,6 +761,25 @@ export class Engine {
     const same = last && dist(last, p) < 0.5;
     switch (this.tool) {
       case 'place': this.cb.onPlace(p); return;
+      case 'door': {
+        const w = this.nearestWall(fp);
+        if (w) this.cb.onOpening(w.idx, w.t);
+        return;
+      }
+      case 'floor': {
+        if (this.pts.length >= 3 && dist(this.pts[0], p) < 0.5) { this.finish(); return; }
+        if (same) return;
+        if (this.shape === 'arc' && this.pts.length >= 1) {
+          this.arcBuf.push(p);
+          if (this.arcBuf.length === 2) {
+            const arc = arcPoints(this.pts[this.pts.length - 1], this.arcBuf[0], this.arcBuf[1], this.arcN);
+            this.pts.push(...arc.slice(1));
+            this.arcBuf = [];
+            if (this.pts.length >= 3 && dist(this.pts[0], this.pts[this.pts.length - 1]) < 0.5) { this.pts.pop(); this.finish(); return; }
+          }
+        } else this.pts.push(p);
+        break;
+      }
       case 'calibrate':
         if (same) return;
         this.pts.push(p);
@@ -648,7 +791,7 @@ export class Engine {
         if (this.shape === 'arc') {
           if (same) return;
           this.pts.push(p);
-          if (this.pts.length === 3) { const [a, m, c] = this.pts; this.pts = []; this.cb.onWallPath(arcPoints(a, m, c, this.arcN), glass); }
+          if (this.pts.length === 3) { const [a, m, c] = this.pts; this.pts = [c]; this.cb.onWallPath(arcPoints(a, m, c, this.arcN), glass); }
         } else {
           if (same) { this.pts = []; break; }
           if (last) this.cb.onWall(last, p, glass);
@@ -673,6 +816,7 @@ export class Engine {
   private onDbl = () => {
     if ((this.tool === 'wall' || this.tool === 'glass') && this.shape === 'line') { this.pts = []; this.updateRubber(); }
     if (this.tool === 'array' && this.shape === 'line') this.finish();
+    if (this.tool === 'floor') this.finish();
   };
 
   // ───────────────────────── 내보내기 ─────────────────────────

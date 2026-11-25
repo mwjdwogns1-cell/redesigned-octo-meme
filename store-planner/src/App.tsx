@@ -1,15 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { Item, LibItem, Project, Pt, Segment } from './types';
+import type { Item, LibItem, Opening, Project, Pt, Segment } from './types';
 import { Engine, loadModel, type Layers, type Selection, type Shape, type Tool } from './engine';
 import { DEFAULT_LIBRARY } from './library';
 import {
   cloneProject, download, itemFromLib, libFromModels, newProject, normalizeProject, readAs, regenSegment,
-  removeWall, sampleProject, tally, tallyCSV,
+  removeWall, sampleProject, tally, tallyCSV, bakeForLegacy, floorArea, openingLabel, sampleInfra,
 } from './project';
+import { autoWalls } from './autowall';
+
+const INFRA = import.meta.env.MODE === 'infra';
 import { decodeText, parseDxf } from './dxf';
 import { dist, expandSegment, uid } from './geom';
 
-const LS_KEY = 'store-planner:project';
+const LS_KEY = INFRA ? 'store-planner-infra:project' : 'store-planner:project';
 const LS_LIB = 'store-planner:library';
 
 function loadInitial(): Project {
@@ -17,7 +20,7 @@ function loadInitial(): Project {
     const s = localStorage.getItem(LS_KEY);
     if (s) return normalizeProject(JSON.parse(s));
   } catch { /* 저장소 사용 불가 */ }
-  return sampleProject();
+  return INFRA ? sampleInfra() : sampleProject();
 }
 function loadLib(): LibItem[] {
   try { const s = localStorage.getItem(LS_LIB); if (s) return JSON.parse(s); } catch { /* */ }
@@ -44,6 +47,8 @@ export default function App() {
   const [arcN, setArcN] = useState(12);
   const [segDef, setSegDef] = useState<Pick<Segment, 'align' | 'side' | 'remainder' | 'gap'>>({ align: 'center', side: 'back', remainder: 'none', gap: 0 });
   const [libFilter, setLibFilter] = useState('');
+  const [doorDef, setDoorDef] = useState<Pick<Opening, 'w' | 'h' | 'kind'>>({ w: 200, h: 240, kind: 'glass' });
+  const [aw, setAw] = useState({ layer: '', kind: 'wall' as 'wall' | 'glass', minT: 3, maxT: 40, minLen: 20, singles: false, singleT: 10 });
 
   const lib = useMemo(() => [...baseLib, ...libFromModels(project)], [baseLib, project.models]); // eslint-disable-line react-hooks/exhaustive-deps
   const libById = useMemo(() => new Map(lib.map((l) => [l.id, l])), [lib]);
@@ -52,6 +57,7 @@ export default function App() {
   const actRef = useRef(activeLib); actRef.current = activeLib;
   const segDefRef = useRef(segDef); segDefRef.current = segDef;
   const wallRef = useRef({ wallT, glassH }); wallRef.current = { wallT, glassH };
+  const doorRef = useRef(doorDef); doorRef.current = doorDef;
 
   /** 변경 커밋 (실행 취소 기록 포함) */
   const commit = useCallback((fn: (p: Project) => void) => {
@@ -93,6 +99,21 @@ export default function App() {
         if (it) { it.x = Math.round(x * 10) / 10; it.z = Math.round(z * 10) / 10; }
       }),
       onCalibrate: (a, b) => calibrate(a, b),
+      onOpening: (wall, t) => {
+        const d = doorRef.current;
+        const o: Opening = { id: uid('op'), wall, t: Math.round(t), w: d.w, h: d.h, kind: d.kind };
+        commit((p) => { p.openings = [...(p.openings || []), o]; });
+        setSel({ type: 'opening', id: o.id });
+      },
+      onFloor: (pts) => {
+        commit((p) => {
+          const zone = { id: uid('z'), pts: pts.map(([x, z]) => [r1(x), r1(z)] as Pt), mat: { ...p.floor.mat } };
+          if (p.floor.shape !== 'poly') p.floor.zones = [];
+          p.floor.zones.push(zone);
+          p.floor.shape = 'poly';
+        });
+        setStatus('바닥 외곽을 만들었습니다. 추가 구역은 같은 방법으로 더 그릴 수 있습니다.');
+      },
     });
     engRef.current = eng;
     eng.setView('2d');
@@ -186,6 +207,7 @@ export default function App() {
   const deleteSelection = useCallback(() => {
     const s = sel; if (!s) return;
     if (s.type === 'wall') commit((p) => removeWall(p, s.idx));
+    else if (s.type === 'opening') commit((p) => { p.openings = (p.openings || []).filter((o) => o.id !== s.id); });
     else {
       const it = projRef.current.items.find((i) => i.id === s.id);
       if (it?.segId) {
@@ -223,7 +245,9 @@ export default function App() {
       if (k === 'v') pickTool('select');
       if (k === 'w') pickTool('wall');
       if (k === 'g') pickTool('glass');
-      if (k === 'a') pickTool('array');
+      if (k === 'a' && !INFRA) pickTool('array');
+      if (k === 'd' && !(e.ctrlKey || e.metaKey)) pickTool('door');
+      if (k === 'f') pickTool('floor');
       if (e.key === 'Escape' && tool !== 'select' && !e.repeat) { /* 엔진이 진행 중 입력 취소 */ }
     };
     window.addEventListener('keydown', h);
@@ -346,6 +370,12 @@ export default function App() {
   };
 
   const t = useMemo(() => tally(project), [project]);
+  const area = floorArea(project);
+  const selOp = sel?.type === 'opening' ? (project.openings || []).find((o) => o.id === sel.id) : undefined;
+  const updateOp = (patch: Partial<Opening>) => {
+    if (!selOp) return;
+    commit((p) => { p.openings = (p.openings || []).map((o) => (o.id === selOp.id ? { ...o, ...patch } : o)); });
+  };
   const underlay = project.floor.underlay;
   const dxfLayers = underlay.ref ? project.underlays[underlay.ref]?.layers : undefined;
   const cats = useMemo(() => {
@@ -367,14 +397,15 @@ export default function App() {
   const segInfo = selSeg ? (() => { const li = libById.get(selSeg.libId); return li ? expandSegment(selSeg, li) : null; })() : null;
 
   return (
-    <div className="app">
+    <div className={'app' + (INFRA ? ' infra' : '')}>
       <header className="bar">
-        <strong className="brand">매장 3D 플래너</strong>
+        <strong className="brand">{INFRA ? '매장 인프라 3D' : '매장 3D 플래너'}</strong>
         <div className="grp">
           <button onClick={() => { if (confirm('새 프로젝트를 시작할까요? (현재 작업은 실행취소로 복구 가능)')) commit((p) => Object.assign(p, newProject())); }}>새로</button>
           <button onClick={() => openFile('project', '.json')}>열기</button>
           <button onClick={() => download('store-plan.json', JSON.stringify(project), 'application/json')}>저장</button>
-          <button onClick={() => { if (confirm('샘플 매장을 불러올까요?')) { commit((p) => Object.assign(p, sampleProject())); setTimeout(() => engRef.current?.fit(), 50); } }}>샘플</button>
+          <button title="출입구를 벽 조각+상부 인방으로 풀어서 기존 플래너에서 열 수 있게 저장" onClick={() => download('store-plan-기존플래너용.json', JSON.stringify(bakeForLegacy(project)), 'application/json')}>기존 플래너용 저장</button>
+          <button onClick={() => { if (confirm('샘플 매장을 불러올까요?')) { commit((p) => Object.assign(p, INFRA ? sampleInfra() : sampleProject())); setTimeout(() => engRef.current?.fit(), 50); } }}>샘플</button>
         </div>
         <div className="grp">
           <button onClick={() => openFile('dxf', '.dxf,.dwg')}>도면 DXF</button>
@@ -400,7 +431,7 @@ export default function App() {
 
       <div className="bar tools">
         <div className="grp seg">
-          {([['select', '선택 V'], ['wall', '벽 W'], ['glass', '유리 G'], ['array', '구간 배치 A'], ['calibrate', '축척 맞추기']] as [Tool, string][]).map(([k, label]) =>
+          {([['select', '선택 V'], ['wall', '벽 W'], ['glass', '유리 G'], ['door', '출입구 D'], ['floor', '바닥 F'], ...(INFRA ? [] : [['array', '구간 배치 A']]), ['calibrate', '축척 맞추기']] as [Tool, string][]).map(([k, label]) =>
             <button key={k} className={tool === k ? 'on' : ''} onClick={() => pickTool(k)}>{label}</button>)}
         </div>
         <div className="grp seg">
@@ -408,11 +439,11 @@ export default function App() {
           <button className={shape === 'arc' ? 'on' : ''} onClick={() => pickTool(tool, 'arc')}>곡선(3점)</button>
         </div>
         <label><input type="checkbox" checked={snap} onChange={(e) => setSnap(e.target.checked)} /> 스냅 10cm</label>
-        {(['walls', 'glass', 'items', 'underlay', 'segs'] as (keyof Layers)[]).map((k) =>
+        {((INFRA ? ['walls', 'glass', 'underlay'] : ['walls', 'glass', 'items', 'underlay', 'segs']) as (keyof Layers)[]).map((k) =>
           <label key={k}><input type="checkbox" checked={layers[k]} onChange={(e) => setLayers({ ...layers, [k]: e.target.checked })} /> {{ walls: '벽', glass: '유리', items: '집기', underlay: '밑그림', segs: '구간선' }[k]}</label>)}
       </div>
 
-      <aside className="left">
+      {!INFRA && <aside className="left">
         <div className="ttl">집기 라이브러리</div>
         <div className="hint">아이템 선택 후 → 클릭 배치, 또는 [구간 배치]로 선을 따라 자동 배열</div>
         <input className="search" placeholder="검색" value={libFilter} onChange={(e) => setLibFilter(e.target.value)} />
@@ -434,7 +465,7 @@ export default function App() {
           <button onClick={() => download('library.json', JSON.stringify(baseLib, null, 2), 'application/json')}>라이브러리 저장</button>
           <button onClick={() => { setBaseLib(DEFAULT_LIBRARY); try { localStorage.removeItem(LS_LIB); } catch { /* */ } }}>기본값</button>
         </div>
-      </aside>
+      </aside>}
 
       <main className="vp" ref={vpRef}>
         <div className="status">{status}</div>
@@ -485,14 +516,28 @@ export default function App() {
           </section>
         )}
 
+        {selOp && (
+          <section>
+            <div className="ttl">출입구 · {openingLabel(selOp)}</div>
+            <div className="form">
+              <label>폭<input type="number" value={selOp.w} onChange={(e) => updateOp({ w: Number(e.target.value) || 10 })} /></label>
+              <label>높이<input type="number" value={selOp.h} onChange={(e) => updateOp({ h: Number(e.target.value) || 10 })} /></label>
+              <label>위치(벽 시작점→중심)<input type="number" value={selOp.t} onChange={(e) => updateOp({ t: Number(e.target.value) || 0 })} /></label>
+              <label>종류<select value={selOp.kind} onChange={(e) => updateOp({ kind: e.target.value as Opening['kind'] })}>
+                <option value="glass">유리 자동문</option><option value="swing">여닫이문</option><option value="open">개구부(문 없음)</option></select></label>
+            </div>
+            <div className="row"><button className="danger" onClick={deleteSelection}>삭제</button></div>
+          </section>
+        )}
+
         {wallInfo && sel?.type === 'wall' && (
           <section>
             <div className="ttl">{wallInfo.st.kind === 'glass' ? '유리' : '벽'} #{sel.idx}</div>
             <div className="info">길이 {Math.round(wallInfo.L)} cm</div>
             <div className="form">
               <label>두께<input type="number" value={wallInfo.t} onChange={(e) => commit((p) => { p.floor.plan.solids[sel.idx * 5 + 4] = Number(e.target.value); })} /></label>
-              <label>높이<input type="number" value={wallInfo.st.h ?? project.floor.plan.h} onChange={(e) => commit((p) => { p.floor.plan.wallStyle[String(sel.idx)] = { ...wallInfo.st, h: Number(e.target.value) }; })} /></label>
-              <label>띄움<input type="number" value={wallInfo.st.y0 ?? 0} onChange={(e) => commit((p) => { p.floor.plan.wallStyle[String(sel.idx)] = { ...wallInfo.st, y0: Number(e.target.value) }; })} /></label>
+              <label>윗면 높이<input type="number" value={wallInfo.st.h ?? project.floor.plan.h} onChange={(e) => commit((p) => { p.floor.plan.wallStyle[String(sel.idx)] = { ...wallInfo.st, h: Number(e.target.value) }; })} /></label>
+              <label>아랫면 높이<input type="number" value={wallInfo.st.y0 ?? 0} onChange={(e) => commit((p) => { p.floor.plan.wallStyle[String(sel.idx)] = { ...wallInfo.st, y0: Number(e.target.value) }; })} /></label>
               <label>종류<select value={wallInfo.st.kind === 'glass' ? 'glass' : 'wall'} onChange={(e) => commit((p) => {
                 const st = { ...wallInfo.st }; if (e.target.value === 'glass') st.kind = 'glass'; else delete st.kind;
                 p.floor.plan.wallStyle[String(sel.idx)] = st;
@@ -511,12 +556,17 @@ export default function App() {
             <label>벽 높이<input type="number" value={project.floor.plan.h} onChange={(e) => commit((p) => { p.floor.plan.h = Number(e.target.value) || 270; })} /></label>
             <label>벽 두께<input type="number" value={wallT} onChange={(e) => setWallT(Number(e.target.value) || 15)} /></label>
             <label>유리 높이<input type="number" value={glassH} onChange={(e) => setGlassH(Number(e.target.value) || 270)} /></label>
+            <label>문 폭<input type="number" value={doorDef.w} onChange={(e) => setDoorDef({ ...doorDef, w: Number(e.target.value) || 90 })} /></label>
+            <label>문 높이<input type="number" value={doorDef.h} onChange={(e) => setDoorDef({ ...doorDef, h: Number(e.target.value) || 210 })} /></label>
+            <label className="wide">문 종류<select value={doorDef.kind} onChange={(e) => setDoorDef({ ...doorDef, kind: e.target.value as Opening['kind'] })}>
+              <option value="glass">유리 자동문</option><option value="swing">여닫이문</option><option value="open">개구부(문 없음)</option></select></label>
             <label>곡선 분할<input type="number" min={4} max={48} value={arcN} onChange={(e) => setArcN(Math.max(4, Math.min(48, Number(e.target.value) || 12)))} /></label>
           </div>
-          <div className="info">면적 {(project.floor.w * project.floor.d / 10000).toFixed(1)}㎡ ({(project.floor.w * project.floor.d / 10000 / 3.3058).toFixed(1)}평) · 단위 cm</div>
+          <div className="info">면적 {(area / 10000).toFixed(1)}㎡ ({(area / 10000 / 3.3058).toFixed(1)}평) · 단위 cm{project.floor.shape === 'poly' ? ' · 다각형 바닥' : ''}</div>
+          {project.floor.shape === 'poly' && <div className="row"><button onClick={() => commit((p) => { p.floor.shape = 'rect'; p.floor.zones = []; })}>바닥을 직사각형으로 되돌리기</button></div>}
         </section>
 
-        <section>
+        {!INFRA && <section>
           <div className="ttl">구간 배치 기본값</div>
           <div className="form">
             <label>정렬<select value={segDef.align} onChange={(e) => setSegDef({ ...segDef, align: e.target.value as Segment['align'] })}>
@@ -527,7 +577,7 @@ export default function App() {
               <option value="none">비워둠</option><option value="stretch">모듈 늘리기</option><option value="fill">보충재 추가</option></select></label>
             <label>간격<input type="number" value={segDef.gap} onChange={(e) => setSegDef({ ...segDef, gap: Number(e.target.value) || 0 })} /></label>
           </div>
-        </section>
+        </section>}
 
         {underlay.ref && (
           <section>
@@ -551,12 +601,47 @@ export default function App() {
           </section>
         )}
 
+        {dxfLayers && (
+          <section>
+            <div className="ttl">레이어 → 벽 자동 생성</div>
+            <div className="hint">벽이 두 줄(양쪽 면)로 그려진 레이어를 고르면, 평행한 선 쌍을 찾아 중심선 벽으로 만듭니다.</div>
+            <div className="form">
+              <label className="wide">레이어<select value={aw.layer} onChange={(e) => setAw({ ...aw, layer: e.target.value })}>
+                <option value="">선택…</option>
+                {dxfLayers.map((l) => <option key={l.name} value={l.name}>{l.name} ({l.segs.length / 4})</option>)}
+              </select></label>
+              <label>만들 종류<select value={aw.kind} onChange={(e) => setAw({ ...aw, kind: e.target.value as 'wall' | 'glass' })}>
+                <option value="wall">벽</option><option value="glass">유리</option></select></label>
+              <label>최소 선 길이<input type="number" value={aw.minLen} onChange={(e) => setAw({ ...aw, minLen: Number(e.target.value) || 0 })} /></label>
+              <label>두께 최소<input type="number" value={aw.minT} onChange={(e) => setAw({ ...aw, minT: Number(e.target.value) || 0 })} /></label>
+              <label>두께 최대<input type="number" value={aw.maxT} onChange={(e) => setAw({ ...aw, maxT: Number(e.target.value) || 40 })} /></label>
+              <label className="wide"><span><input type="checkbox" checked={aw.singles} onChange={(e) => setAw({ ...aw, singles: e.target.checked })} /> 짝 없는 한 줄 선도 벽으로 (두께 {aw.singleT}cm)</span></label>
+            </div>
+            <div className="row">
+              <button className="primary" disabled={!aw.layer} onClick={() => {
+                const l = dxfLayers.find((x) => x.name === aw.layer); if (!l) return;
+                const r = autoWalls(l.segs, aw);
+                if (!r.solids.length) { alert('벽으로 바꿀 선 쌍을 찾지 못했습니다. 두께 범위나 레이어를 바꿔보세요.'); return; }
+                commit((p) => {
+                  const pl = p.floor.plan;
+                  const base = pl.solids.length / 5;
+                  pl.solids.push(...r.solids);
+                  if (aw.kind === 'glass') for (let i = 0; i < r.solids.length / 5; i++) pl.wallStyle[String(base + i)] = { kind: 'glass', h: glassH };
+                });
+                setStatus(`${aw.layer}: 벽 ${r.paired}개(선 쌍)` + (r.singles ? ` + ${r.singles}개(한 줄)` : '') + ' 생성 · 잘못된 건 선택 후 Del, 전체 취소는 Ctrl+Z');
+              }}>벽 생성</button>
+            </div>
+          </section>
+        )}
+
         <section>
           <div className="ttl">집계표</div>
           <table className="tally"><tbody>
             {t.rows.map((r) => <tr key={r.name + r.size}><td>{r.name}<small>{r.size}</small></td><td>{r.count}</td></tr>)}
             <tr><td>벽체 총길이</td><td>{(t.wallLen / 100).toFixed(1)}m</td></tr>
             <tr><td>유리 총길이</td><td>{(t.glassLen / 100).toFixed(1)}m</td></tr>
+            {(project.openings || []).length > 0 && <tr><td>출입구</td><td>{(project.openings || []).length}개</td></tr>}
+            <tr><td>바닥 면적</td><td>{(area / 10000).toFixed(1)}㎡</td></tr>
           </tbody></table>
         </section>
       </aside>

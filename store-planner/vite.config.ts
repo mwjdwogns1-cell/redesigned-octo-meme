@@ -1,4 +1,11 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
-// 상위 폴더의 PostCSS 설정을 읽지 않도록 고정
-export default defineConfig({ plugins: [react()], base: './', css: { postcss: {} } });
+import { viteSingleFile } from 'vite-plugin-singlefile';
+
+// infra 모드: 회사 PC용 단일 HTML (설치·인터넷 불필요, 더블클릭 실행)
+export default defineConfig(({ mode }) => ({
+  plugins: mode === 'infra' ? [react(), viteSingleFile()] : [react()],
+  base: './',
+  css: { postcss: {} },
+  build: mode === 'infra' ? { outDir: 'dist-infra', chunkSizeWarningLimit: 4000 } : { chunkSizeWarningLimit: 4000 },
+}));

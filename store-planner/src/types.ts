@@ -4,8 +4,8 @@ export type Pt = [number, number];
 export interface Mat { preset: string; tile: number; tint: string }
 
 export interface WallStyle {
-  h?: number;        // 높이
-  y0?: number;       // 바닥에서 띄움
+  h?: number;        // 윗면 높이(바닥 기준)
+  y0?: number;       // 아랫면 높이(바닥 기준), 없으면 0
   color?: string;
   kind?: 'glass';
   decals?: unknown[];
@@ -73,6 +73,16 @@ export interface Segment {
   gap: number;
 }
 
+// 출입구/개구부: 벽(solids 인덱스) 위에 뚫린 구멍
+export interface Opening {
+  id: string;
+  wall: number;      // 벽 인덱스
+  t: number;         // 벽 시작점에서 개구부 중심까지 거리(cm)
+  w: number;         // 폭
+  h: number;         // 높이
+  kind: 'open' | 'glass' | 'swing';
+}
+
 export interface Project {
   version: number;
   floor: Floor;
@@ -81,6 +91,7 @@ export interface Project {
   models: Record<string, ModelDef>;
   underlays: Record<string, UnderlayData>;
   segments?: Segment[];
+  openings?: Opening[];
 }
 
 // 라이브러리 아이템 정의

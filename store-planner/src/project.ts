@@ -1,4 +1,4 @@
-import type { Item, LibItem, Project, Segment } from './types';
+import type { Item, LibItem, Opening, Project, Pt, Segment } from './types';
 import { arcPoints, expandSegment, uid } from './geom';
 import { DEFAULT_LIBRARY } from './library';
 
@@ -35,6 +35,7 @@ export function normalizeProject(raw: unknown): Project {
     models: p.models || {},
     underlays: p.underlays || {},
     segments: Array.isArray(p.segments) ? p.segments : [],
+    openings: Array.isArray(p.openings) ? p.openings : [],
   };
 }
 
@@ -77,6 +78,60 @@ export function removeWall(p: Project, idx: number) {
   }
   pl.wallStyle = st;
   pl.rev++;
+  p.openings = (p.openings || []).filter((o) => o.wall !== idx).map((o) => (o.wall > idx ? { ...o, wall: o.wall - 1 } : o));
+}
+
+export function polyArea(pts: Pt[]) {
+  let a = 0;
+  for (let i = 0; i < pts.length; i++) { const [x1, z1] = pts[i], [x2, z2] = pts[(i + 1) % pts.length]; a += x1 * z2 - x2 * z1; }
+  return Math.abs(a) / 2;
+}
+
+export function floorArea(p: Project) {
+  if (p.floor.shape === 'poly' && p.floor.zones.length) return p.floor.zones.reduce((s, z) => s + polyArea(z.pts), 0);
+  return p.floor.w * p.floor.d;
+}
+
+/** 기존 플래너용: 개구부를 벽 조각 + 상부 인방(y0/h)으로 풀어서 저장 */
+export function bakeForLegacy(src: Project): Project {
+  const p = cloneProject(src);
+  const pl = p.floor.plan;
+  const s = pl.solids, st = pl.wallStyle;
+  const solids: number[] = [];
+  const style: typeof st = {};
+  const ops = p.openings || [];
+  for (let i = 0, idx = 0; i + 4 < s.length + 1; i += 5, idx++) {
+    const [x1, z1, x2, z2, t] = s.slice(i, i + 5);
+    const ws = st[String(idx)] || {};
+    const L = Math.hypot(x2 - x1, z2 - z1);
+    const ux = L ? (x2 - x1) / L : 0, uz = L ? (z2 - z1) / L : 0;
+    const top = ws.h ?? pl.h;
+    const add = (a: number, b: number, extra: Record<string, unknown> = {}) => {
+      if (b - a < 0.5) return;
+      const k = String(solids.length / 5);
+      const r = (v: number) => Math.round(v * 10) / 10;
+      solids.push(r(x1 + ux * a), r(z1 + uz * a), r(x1 + ux * b), r(z1 + uz * b), t);
+      const merged = { ...ws, ...extra };
+      if (Object.keys(merged).length) style[k] = merged;
+    };
+    const mine = ops.filter((o) => o.wall === idx).map((o) => ({ o, a: Math.max(0, o.t - o.w / 2), b: Math.min(L, o.t + o.w / 2) })).sort((m, n) => m.a - n.a);
+    let cur = 0;
+    for (const r of mine) {
+      add(cur, r.a);
+      if (top > r.o.h + 0.5) add(Math.max(cur, r.a), r.b, { y0: Math.max(ws.y0 ?? 0, r.o.h), h: top });
+      cur = Math.max(cur, r.b);
+    }
+    add(cur, L);
+  }
+  pl.solids = solids;
+  pl.wallStyle = style;
+  if (p.floor.shape === 'poly') p.floor.shape = 'rect';
+  delete p.openings;
+  return p;
+}
+
+export function openingLabel(o: Opening) {
+  return { open: '개구부', glass: '유리 자동문', swing: '여닫이문' }[o.kind];
 }
 
 export function download(name: string, data: BlobPart, type: string) {
@@ -156,5 +211,27 @@ export function sampleProject(): Project {
     itemFromLib(DEFAULT_LIBRARY.find((l) => l.id === 'sofa-240')!, -500, -300),
     itemFromLib(DEFAULT_LIBRARY.find((l) => l.id === 'column-sq')!, 600, -200),
   );
+  return p;
+}
+
+/** 인프라 샘플: 곡선 쇼윈도 + 출입구 + 다각형 바닥 */
+export function sampleInfra(): Project {
+  const p = newProject(2400, 1300);
+  const pl = p.floor.plan;
+  const W = (x1: number, z1: number, x2: number, z2: number, t = 15) => pl.solids.push(x1, z1, x2, z2, t);
+  W(-1200, -650, 1200, -650);
+  W(1200, -650, 1200, -50);
+  const arc = arcPoints([1200, -50], [985, 405], [200, 650], 12);
+  const i0 = pl.solids.length / 5;
+  for (let i = 1; i < arc.length; i++) { W(arc[i - 1][0], arc[i - 1][1], arc[i][0], arc[i][1], 2); pl.wallStyle[String(i0 + i - 1)] = { kind: 'glass', h: 300 }; }
+  W(200, 650, -1200, 650);
+  W(-1200, 650, -1200, -650);
+  const glassIdx = i0 + 6;
+  p.openings = [
+    { id: 'op1', wall: glassIdx, t: 50, w: 200, h: 240, kind: 'glass' },
+    { id: 'op2', wall: 0, t: 400, w: 90, h: 210, kind: 'swing' },
+  ];
+  p.floor.shape = 'poly';
+  p.floor.zones = [{ id: 'z1', pts: [[-1200, -650], [1200, -650], [1200, -50], ...arc.slice(1, -1), [200, 650], [-1200, 650]], mat: { preset: 'marble', tile: 80, tint: '#ffffff' } }];
   return p;
 }
